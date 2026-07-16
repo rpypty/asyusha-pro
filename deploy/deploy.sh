@@ -110,6 +110,7 @@ set +a
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
 
 mkdir -p "$repo_dir/backups"
+umask 077
 backup_path="$repo_dir/backups/predeploy_$(date -u +%Y%m%dT%H%M%SZ)_${previous_sha:0:12}.dump"
 log "Creating PostgreSQL backup: $backup_path"
 compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom >"$backup_path"

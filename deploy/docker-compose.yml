@@ -107,6 +107,7 @@ services:
       - -c
       - |
         set -eu
+        umask 077
         while true; do
           stamp=$$(date -u +%Y%m%dT%H%M%SZ)
           pg_dump --format=custom --file="/backups/asyusha_pro_$${stamp}.dump"
