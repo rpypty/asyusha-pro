@@ -1472,7 +1472,6 @@ export function App() {
               {screen === "week" && (
                 <WeekScreen
                   days={week}
-                  selectedDate={selectedDate}
                   weekStart={weekStart}
                   onNextWeek={() => navigate({ screen: "week", date: addDays(weekStart, 7) })}
                   onOpenDay={(date) => {
@@ -2217,14 +2216,12 @@ function WeekScreen({
   onNextWeek,
   onOpenDay,
   onPrevWeek,
-  selectedDate,
   weekStart,
 }: {
   days: SummaryDay[];
   onNextWeek: () => void;
   onOpenDay: (date: string) => void;
   onPrevWeek: () => void;
-  selectedDate: string;
   weekStart: string;
 }) {
   const today = localTodayDate();

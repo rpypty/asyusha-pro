@@ -1,5 +1,6 @@
-import { query } from "./db.js";
 import { hashPassword } from "./auth.js";
+import { config } from "./config.js";
+import { query } from "./db.js";
 
 export async function initDb() {
   await query(`
@@ -158,7 +159,9 @@ export async function initDb() {
     );
   `);
 
-  await seedDemoData();
+  if (config.SEED_DEMO_DATA) {
+    await seedDemoData();
+  }
 }
 
 async function seedDemoData() {

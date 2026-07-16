@@ -9,6 +9,7 @@
   "scripts": {
     "db:down": "docker compose down",
     "db:up": "docker compose up -d postgres",
+    "deploy:prod": "bash deploy/deploy.sh",
     "dev": "pnpm --parallel --recursive dev",
     "build": "pnpm --recursive build",
     "lint": "pnpm --recursive lint",

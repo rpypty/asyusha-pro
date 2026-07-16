@@ -4,6 +4,7 @@ import {
   scryptSync,
   timingSafeEqual
 } from "node:crypto";
+import { config } from "./config.js";
 import { query } from "./db.js";
 
 export const SESSION_COOKIE = "asysha_session";
@@ -155,23 +156,35 @@ export function parseCookie(header: string | undefined, name: string) {
 }
 
 export function sessionCookie(token: string, expiresAt: Date) {
-  return [
+  const attributes = [
     `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     `Expires=${expiresAt.toUTCString()}`
-  ].join("; ");
+  ];
+
+  if (config.NODE_ENV === "production") {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
 export function clearSessionCookie() {
-  return [
+  const attributes = [
     `${SESSION_COOKIE}=`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
-  ].join("; ");
+  ];
+
+  if (config.NODE_ENV === "production") {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
 function hashSessionToken(token: string) {

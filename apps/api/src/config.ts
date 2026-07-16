@@ -1,6 +1,24 @@
 import "dotenv/config";
 import { z } from "zod";
 
+const booleanFromEnv = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return value;
+}, z.boolean());
+
 const envSchema = z.object({
   DATABASE_URL: z
     .string()
@@ -11,11 +29,18 @@ const envSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
+  SEED_DEMO_DATA: booleanFromEnv.optional(),
   TELEGRAM_BOT_TOKEN: z.string().trim().optional(),
-  TELEGRAM_POLLING_ENABLED: z.coerce.boolean().default(false),
+  TELEGRAM_POLLING_ENABLED: booleanFromEnv.default(false),
   TELEGRAM_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(2500),
   TELEGRAM_REMINDER_INTERVAL_MS: z.coerce.number().int().positive().default(15000),
   WEB_ORIGIN: z.string().url().default("http://localhost:5173")
 });
 
-export const config = envSchema.parse(process.env);
+const parsedConfig = envSchema.parse(process.env);
+
+export const config = {
+  ...parsedConfig,
+  SEED_DEMO_DATA:
+    parsedConfig.SEED_DEMO_DATA ?? parsedConfig.NODE_ENV !== "production"
+};

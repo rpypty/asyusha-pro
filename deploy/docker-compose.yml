@@ -1,0 +1,135 @@
+name: asyusha-pro
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - database
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 0.75
+    logging: *default-logging
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      PORT: 4000
+      SEED_DEMO_DATA: "false"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-false}
+      WEB_ORIGIN: https://asyusha.space
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "4000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:4000/api/health').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - database
+      - frontend
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 0.75
+    logging: *default-logging
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_BIND_PORT:-5080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.25
+    logging: *default-logging
+
+  db-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGHOST: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGUSER: ${POSTGRES_USER:?POSTGRES_USER is required}
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        while true; do
+          stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+          pg_dump --format=custom --file="/backups/asyusha_pro_$${stamp}.dump"
+          find /backups -type f -name '*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ../backups:/backups
+    networks:
+      - database
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.25
+    logging: *default-logging
+
+networks:
+  database:
+    internal: true
+  frontend:
+
+volumes:
+  postgres-data:

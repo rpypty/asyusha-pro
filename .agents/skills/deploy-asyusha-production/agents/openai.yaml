@@ -1,0 +1,4 @@
+interface:
+  display_name: "Деплой Asyusha в прод"
+  short_description: "Безопасно выкладывает Asyusha Pro на VPS"
+  default_prompt: "Use $deploy-asyusha-production to commit, push, and deploy the current Asyusha Pro changes to production."
