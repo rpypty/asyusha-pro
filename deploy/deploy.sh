@@ -113,7 +113,7 @@ mkdir -p "$repo_dir/backups"
 umask 077
 backup_path="$repo_dir/backups/predeploy_$(date -u +%Y%m%dT%H%M%SZ)_${previous_sha:0:12}.dump"
 log "Creating PostgreSQL backup: $backup_path"
-compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom >"$backup_path"
+compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom </dev/null >"$backup_path"
 [[ -s "$backup_path" ]] || { log "Backup is empty"; exit 1; }
 find "$repo_dir/backups" -maxdepth 1 -type f -name 'predeploy_*.dump' -mtime +14 -delete
 
