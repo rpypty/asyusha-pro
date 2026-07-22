@@ -25,6 +25,7 @@ import {
   deleteTag,
   deleteTask,
   getBacklog,
+  getBlogMonthPlan,
   getDay,
   getHistory,
   getIdeas,
@@ -36,7 +37,8 @@ import {
   getTelegramSettings,
   getVideoPostingMonth,
   getWeekSummary,
-  setVideoPostingDay,
+  setVideoPostingPlatform,
+  saveBlogMonthPlan,
   updateIdea,
   updateTag,
   updateTask,
@@ -128,7 +130,24 @@ const ideaTagSchema = z.object({
 });
 
 const videoPostingDaySchema = z.object({
+  platform: z.enum(["instagram", "tiktok"]),
   checked: z.boolean()
+});
+
+const blogMonthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+const blogMonthPlanSchema = z.object({
+  focus: z.string().trim().max(500),
+  instagramTarget: z.number().int().min(0).max(999),
+  tiktokTarget: z.number().int().min(0).max(999),
+  items: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(80),
+        title: z.string().trim().min(1).max(200),
+        done: z.boolean()
+      })
+    )
+    .max(50)
 });
 
 const authSchema = z.object({
@@ -374,7 +393,28 @@ export async function buildApp() {
     const body = videoPostingDaySchema.parse(request.body);
 
     return {
-      day: await setVideoPostingDay(params.date, body.checked, user.id)
+      day: await setVideoPostingPlatform(params.date, body.platform, body.checked, user.id)
+    };
+  });
+
+  app.get("/api/blog-plans/:month", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    const params = z.object({ month: blogMonthSchema }).parse(request.params);
+
+    return {
+      plan: await getBlogMonthPlan(params.month, user.id)
+    };
+  });
+
+  app.put("/api/blog-plans/:month", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    const params = z.object({ month: blogMonthSchema }).parse(request.params);
+    const body = blogMonthPlanSchema.parse(request.body);
+
+    return {
+      plan: await saveBlogMonthPlan(params.month, body, user.id)
     };
   });
 

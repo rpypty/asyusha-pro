@@ -45,6 +45,27 @@ type Priority = "must" | "should" | "optional";
 type TaskStatus = "planned" | "in_progress" | "done" | "skipped" | "cancelled";
 type TaskStatsFilter = "done" | "unfinished" | "all";
 type ReminderMode = "before" | "at";
+type VideoPostingPlatform = "instagram" | "tiktok";
+
+type VideoPostingDay = {
+  date: string;
+  instagram: boolean;
+  tiktok: boolean;
+};
+
+type BlogMonthPlanItem = {
+  id: string;
+  title: string;
+  done: boolean;
+};
+
+type BlogMonthPlan = {
+  month: string;
+  focus: string;
+  instagramTarget: number;
+  tiktokTarget: number;
+  items: BlogMonthPlanItem[];
+};
 
 type TaskReminderDto = {
   id: number;
@@ -112,6 +133,7 @@ type SummaryDay = {
   done: number;
   score?: number | null;
   reflectionFilled: boolean;
+  trackingStarted: boolean;
   tags: string[];
 };
 
@@ -125,6 +147,7 @@ type HistoryDay = {
 };
 
 type StatsDto = {
+  trackingStartDate: string | null;
   weekAverage: number;
   monthAverage: number;
   todayScore: number;
@@ -150,6 +173,7 @@ type StatsDto = {
     done: number;
     unfinished: number;
     total: number;
+    trackingStarted: boolean;
   }>;
 };
 
@@ -195,7 +219,7 @@ type EditorDraft = {
   scheduledDate: string | null;
   startTime: string;
   endTime: string;
-  priority: Priority;
+  priority: Priority | null;
   tags: string[];
   reminderEnabled: boolean;
   reminders: EditorReminderDraft[];
@@ -503,6 +527,18 @@ function percentLineColor(value: number) {
   return mixHexColor("#d8bc73", "#5eb985", (clamped - 50) / 50);
 }
 
+function percentProgressGradient(value: number) {
+  const clamped = Math.min(Math.max(value, 0), 100);
+  const currentColor = percentLineColor(clamped);
+
+  if (clamped <= 50) {
+    return `linear-gradient(90deg, #d98286 0%, ${currentColor} 100%)`;
+  }
+
+  const yellowOffset = (50 / clamped) * 100;
+  return `linear-gradient(90deg, #d98286 0%, #d8bc73 ${yellowOffset}%, ${currentColor} 100%)`;
+}
+
 function monthGrid(date: string) {
   const first = `${date.slice(0, 7)}-01`;
   const firstDate = parseIsoDate(first);
@@ -612,7 +648,7 @@ function emptyEditor(date: string | null): EditorDraft {
     scheduledDate: date,
     startTime: "",
     endTime: "",
-    priority: "should",
+    priority: null,
     tags: [],
     reminderEnabled: true,
     reminders: [],
@@ -673,7 +709,8 @@ function parseRoute(pathname = window.location.pathname, search = window.locatio
   }
 
   if (parts[0] === "month" && parts[1] && monthPattern.test(parts[1])) {
-    return { screen: "month", date: `${parts[1]}-01` };
+    const monthDate = queryDate.slice(0, 7) === parts[1] ? queryDate : `${parts[1]}-01`;
+    return { screen: "month", date: monthDate };
   }
 
   if (parts[0] === "stats") {
@@ -753,7 +790,7 @@ function routePath(route: AppRoute) {
     case "week":
       return `/week/${getWeekStart(route.date)}`;
     case "month":
-      return `/month/${route.date.slice(0, 7)}`;
+      return `/month/${route.date.slice(0, 7)}?${dateParam}`;
     case "backlog":
       return `/backlog?${dateParam}`;
     case "blog":
@@ -796,6 +833,16 @@ function tagToken(name: string) {
   };
 }
 
+function emptyBlogMonthPlan(month: string): BlogMonthPlan {
+  return {
+    month,
+    focus: "",
+    instagramTarget: 0,
+    tiktokTarget: 0,
+    items: [],
+  };
+}
+
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => parseRoute());
   const [authChecked, setAuthChecked] = useState(false);
@@ -807,7 +854,14 @@ export function App() {
   const [ideas, setIdeas] = useState<IdeaDto[]>([]);
   const [ideaTags, setIdeaTags] = useState<IdeaTagDto[]>([]);
   const [ideasLoaded, setIdeasLoaded] = useState(false);
-  const [videoPostingDates, setVideoPostingDates] = useState<string[]>([]);
+  const [videoPostingDays, setVideoPostingDays] = useState<VideoPostingDay[]>([]);
+  const [blogMonthPlan, setBlogMonthPlan] = useState<BlogMonthPlan | null>(null);
+  const [blogPostingMonth, setBlogPostingMonth] = useState(() =>
+    localTodayDate().slice(0, 7),
+  );
+  const [blogPlanMonth, setBlogPlanMonth] = useState(() =>
+    localTodayDate().slice(0, 7),
+  );
   const [history, setHistory] = useState<HistoryDay[]>([]);
   const [stats, setStats] = useState<StatsDto | null>(null);
   const [telegram, setTelegram] = useState<TelegramSettings | null>(null);
@@ -831,6 +885,16 @@ export function App() {
   const weekStart = useMemo(() => getWeekStart(selectedDate), [selectedDate]);
   const currentMonth = selectedDate.slice(0, 7);
   const canFillSurvey = selectedDate <= localTodayDate();
+
+  useEffect(() => {
+    if (screen !== "blog") {
+      return;
+    }
+
+    const todayMonth = localTodayDate().slice(0, 7);
+    setBlogPostingMonth(todayMonth);
+    setBlogPlanMonth(todayMonth);
+  }, [screen]);
 
   const navigate = useCallback((nextRoute: AppRoute, mode: "push" | "replace" = "push") => {
     const path = routePath(nextRoute);
@@ -917,18 +981,37 @@ export function App() {
     }
 
     try {
-      const response = await api<{ checkedDates: string[] }>(
-        `/api/video-posting/month?year=${currentMonth.slice(0, 4)}&month=${Number(
-          currentMonth.slice(5, 7),
+      const response = await api<{ days: VideoPostingDay[] }>(
+        `/api/video-posting/month?year=${blogPostingMonth.slice(0, 4)}&month=${Number(
+          blogPostingMonth.slice(5, 7),
         )}`,
       );
-      setVideoPostingDates(response.checkedDates);
+      setVideoPostingDays(response.days);
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "Не удалось загрузить постинг видео",
       );
     }
-  }, [currentMonth, user]);
+  }, [blogPostingMonth, user]);
+
+  const loadBlogMonthPlan = useCallback(async () => {
+    if (!user) {
+      return;
+    }
+
+    setBlogMonthPlan(null);
+
+    try {
+      const response = await api<{ plan: BlogMonthPlan }>(
+        `/api/blog-plans/${blogPlanMonth}`,
+      );
+      setBlogMonthPlan(response.plan);
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error ? loadError.message : "Не удалось загрузить цели месяца",
+      );
+    }
+  }, [blogPlanMonth, user]);
 
   useEffect(() => {
     const parsed = parseRoute();
@@ -970,6 +1053,12 @@ export function App() {
       void loadVideoPosting();
     }
   }, [loadVideoPosting, screen, user]);
+
+  useEffect(() => {
+    if (user && screen === "blog") {
+      void loadBlogMonthPlan();
+    }
+  }, [loadBlogMonthPlan, screen, user]);
 
   useEffect(() => {
     if (user && screen === "login") {
@@ -1060,11 +1149,10 @@ export function App() {
     }
   }
 
-  async function addBacklogTask() {
+  async function addBacklogTask(priority: Priority) {
     const title = backlogQuick.trim();
 
     if (!title) {
-      openEditor(null);
       return;
     }
 
@@ -1075,7 +1163,7 @@ export function App() {
         body: JSON.stringify({
           title,
           scheduledDate: null,
-          priority: "should",
+          priority,
           tags: [],
           reminderEnabled: false,
         }),
@@ -1169,7 +1257,7 @@ export function App() {
   }
 
   async function saveEditor() {
-    if (!editor.title.trim()) {
+    if (!editor.title.trim() || !editor.priority) {
       return;
     }
 
@@ -1323,17 +1411,33 @@ export function App() {
     return response.tag;
   }
 
-  async function toggleVideoPostingDay(date: string) {
-    const checked = !videoPostingDates.includes(date);
+  async function toggleVideoPostingPlatform(
+    date: string,
+    platform: VideoPostingPlatform,
+  ) {
+    const currentDay = videoPostingDays.find((day) => day.date === date);
+    const checked = !(currentDay?.[platform] ?? false);
 
-    setVideoPostingDates((current) =>
-      checked ? [...current, date].sort() : current.filter((item) => item !== date),
-    );
+    setVideoPostingDays((current) => {
+      const existing = current.find((day) => day.date === date) ?? {
+        date,
+        instagram: false,
+        tiktok: false,
+      };
+      const next = { ...existing, [platform]: checked };
+      const withoutDate = current.filter((day) => day.date !== date);
+
+      if (!next.instagram && !next.tiktok) {
+        return withoutDate;
+      }
+
+      return [...withoutDate, next].sort((left, right) => left.date.localeCompare(right.date));
+    });
 
     try {
       await api(`/api/video-posting/${date}`, {
         method: "PUT",
-        body: JSON.stringify({ checked }),
+        body: JSON.stringify({ platform, checked }),
       });
     } catch (toggleError) {
       setError(
@@ -1341,6 +1445,23 @@ export function App() {
       );
       await loadVideoPosting();
     }
+  }
+
+  async function saveBlogMonthPlan(plan: BlogMonthPlan) {
+    const response = await api<{ plan: BlogMonthPlan }>(
+      `/api/blog-plans/${plan.month}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          focus: plan.focus,
+          instagramTarget: plan.instagramTarget,
+          tiktokTarget: plan.tiktokTarget,
+          items: plan.items,
+        }),
+      },
+    );
+    setBlogMonthPlan(response.plan);
+    return response.plan;
   }
 
   async function deleteIdea(ideaId: number) {
@@ -1395,7 +1516,8 @@ export function App() {
     setBacklog([]);
     setIdeas([]);
     setIdeasLoaded(false);
-    setVideoPostingDates([]);
+    setVideoPostingDays([]);
+    setBlogMonthPlan(null);
     setHistory([]);
     setStats(null);
     setTelegram(null);
@@ -1449,7 +1571,7 @@ export function App() {
                   onDeleteTask={setTaskDeleteCandidate}
                   onEditTask={openTaskEditor}
                   onNextDay={() => navigate({ screen: "day", date: addDays(selectedDate, 1) })}
-                  onOpenEditor={() => openEditor()}
+                  onOpenEditor={() => openEditor(selectedDate)}
                   onOpenHistory={() => navigate({ screen: "history", date: selectedDate })}
                   onOpenMonth={() => navigate({ screen: "month", date: selectedDate })}
                   onOpenSettings={() => navigate({ screen: "settings", date: selectedDate })}
@@ -1483,14 +1605,7 @@ export function App() {
               {screen === "month" && (
                 <MonthScreen
                   days={month}
-                  onBack={() => {
-                    if (window.history.length > 1) {
-                      window.history.back();
-                      return;
-                    }
-
-                    navigate({ screen: "day", date: selectedDate });
-                  }}
+                  onBack={() => navigate({ screen: "day", date: selectedDate })}
                   selectedDate={selectedDate}
                   onNextMonth={() => navigate({ screen: "month", date: addMonths(selectedDate, 1) })}
                   onOpenDay={(date) => {
@@ -1514,13 +1629,30 @@ export function App() {
               )}
               {screen === "blog" && (
                 <BlogScreen
-                  checkedDates={videoPostingDates}
-                  date={selectedDate}
+                  date={`${blogPostingMonth}-01`}
                   ideasCount={ideas.length}
-                  onNextMonth={() => navigate({ screen: "blog", date: addMonths(selectedDate, 1) })}
+                  onNextMonth={() =>
+                    setBlogPostingMonth((month) => addMonths(`${month}-01`, 1).slice(0, 7))
+                  }
+                  onNextPlanMonth={() =>
+                    setBlogPlanMonth((month) => addMonths(`${month}-01`, 1).slice(0, 7))
+                  }
                   onOpenIdeas={() => navigate({ screen: "ideas", date: selectedDate })}
-                  onPrevMonth={() => navigate({ screen: "blog", date: addMonths(selectedDate, -1) })}
-                  onToggleDay={toggleVideoPostingDay}
+                  onPrevMonth={() =>
+                    setBlogPostingMonth((month) => addMonths(`${month}-01`, -1).slice(0, 7))
+                  }
+                  onPrevPlanMonth={() =>
+                    setBlogPlanMonth((month) => addMonths(`${month}-01`, -1).slice(0, 7))
+                  }
+                  onSaveMonthPlan={saveBlogMonthPlan}
+                  onTogglePlatform={toggleVideoPostingPlatform}
+                  plan={
+                    blogMonthPlan?.month === blogPlanMonth
+                      ? blogMonthPlan
+                      : emptyBlogMonthPlan(blogPlanMonth)
+                  }
+                  planLoading={blogMonthPlan?.month !== blogPlanMonth}
+                  postingDays={videoPostingDays}
                 />
               )}
               {screen === "ideas" && (
@@ -2117,61 +2249,88 @@ function TaskCard({
   const priority = priorityMeta[task.priority];
   const done = task.status === "done";
   const reminderCount = task.reminders?.length ?? 0;
+  const description = task.description.trim();
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
 
   return (
-    <article className={compact ? "task-card compact" : "task-card"}>
-      <button
-        aria-label={
-          done ? `Вернуть задачу "${task.title}" в план` : `Отметить задачу "${task.title}"`
-        }
-        aria-pressed={done}
-        className={done ? "task-check checked" : "task-check"}
-        onClick={() => toggleTask(task)}
-        title={done ? "Вернуть в план" : "Отметить выполненной"}
-        type="button"
-      >
-        {done && <Check size={15} strokeWidth={3} />}
-      </button>
-      <button
-        className="task-body-button"
-        onClick={() => onEditTask(task)}
-        title="Редактировать задачу"
-        type="button"
-      >
-        <h2 className={done ? "done-title" : ""}>{task.title}</h2>
-        <div className="chips">
-          <span
-            className="chip"
-            style={{ backgroundColor: priority.soft, color: priority.color }}
+    <article
+      className={`${compact ? "task-card compact" : "task-card"}${
+        descriptionOpen ? " description-open" : ""
+      }`}
+    >
+      <div className="task-card-row">
+        <button
+          aria-label={
+            done
+              ? `Вернуть задачу "${task.title}" в план`
+              : `Отметить задачу "${task.title}"`
+          }
+          aria-pressed={done}
+          className={done ? "task-check checked" : "task-check"}
+          onClick={() => toggleTask(task)}
+          title={done ? "Вернуть в план" : "Отметить выполненной"}
+          type="button"
+        >
+          {done && <Check size={15} strokeWidth={3} />}
+        </button>
+        <div className="task-card-main">
+          <button
+            className="task-body-button"
+            onClick={() => onEditTask(task)}
+            title="Редактировать задачу"
+            type="button"
           >
-            {priority.label}
-          </span>
-          {reminderCount > 0 && (
-            <span className="chip neutral">
-              {reminderCount} нап.
-            </span>
-          )}
-          {!task.scheduledDate && <span className="chip neutral">Без даты</span>}
-          {task.tags.map((tag) => (
-            <span
-              className="chip"
-              key={tag.id}
-              style={{ backgroundColor: tag.bg, color: tag.fg }}
-            >
-              {tag.name}
-            </span>
-          ))}
+            <h2 className={done ? "done-title" : ""}>{task.title}</h2>
+            <div className="chips">
+              <span
+                className="chip"
+                style={{ backgroundColor: priority.soft, color: priority.color }}
+              >
+                {priority.label}
+              </span>
+              {reminderCount > 0 && (
+                <span className="chip neutral">
+                  {reminderCount} нап.
+                </span>
+              )}
+              {!task.scheduledDate && <span className="chip neutral">Без даты</span>}
+              {task.tags.map((tag) => (
+                <span
+                  className="chip"
+                  key={tag.id}
+                  style={{ backgroundColor: tag.bg, color: tag.fg }}
+                >
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          </button>
         </div>
-      </button>
-      <button
-        aria-label={`Удалить задачу ${task.title}`}
-        className="task-delete-button"
-        onClick={() => onDeleteTask(task)}
-        title="Удалить задачу"
-        type="button"
-      >
-        <Trash2 size={16} />
-      </button>
+        <div className="task-card-actions">
+          {description && (
+            <button
+              aria-expanded={descriptionOpen}
+              aria-label={`${descriptionOpen ? "Скрыть" : "Показать"} описание задачи ${task.title}`}
+              className="task-description-toggle"
+              onClick={() => setDescriptionOpen((open) => !open)}
+              title={descriptionOpen ? "Скрыть описание" : "Показать описание"}
+              type="button"
+            >
+              <ChevronRight size={18} strokeWidth={2.2} />
+            </button>
+          )}
+          <button
+            aria-label={`Удалить задачу ${task.title}`}
+            className="task-delete-button"
+            onClick={() => onDeleteTask(task)}
+            title="Удалить задачу"
+            type="button"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+      {descriptionOpen && <p className="task-description">{description}</p>}
     </article>
   );
 }
@@ -2226,15 +2385,16 @@ function WeekScreen({
 }) {
   const today = localTodayDate();
   const end = addDays(weekStart, 6);
-  const complete = days.reduce((sum, day) => sum + day.done, 0);
-  const total = days.reduce((sum, day) => sum + day.total, 0);
+  const trackedDays = days.filter((day) => day.trackingStarted);
+  const complete = trackedDays.reduce((sum, day) => sum + day.done, 0);
+  const total = trackedDays.reduce((sum, day) => sum + day.total, 0);
   const pct = total ? Math.round((complete / total) * 100) : 0;
-  const scores = days
+  const scores = trackedDays
     .map((day) => day.score)
     .filter((score): score is number => typeof score === "number");
   const avg = scores.length
     ? (scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(1)
-    : "0";
+    : "—";
 
   return (
     <section className="screen padded week-screen fade-in">
@@ -2254,18 +2414,25 @@ function WeekScreen({
           </IconButton>
         </div>
       </header>
-      <div className="metric-grid two">
-        <Metric label="выполнено за неделю" value={`${pct}%`} accent />
+      <div className={`metric-grid two${trackedDays.length ? "" : " no-tracking"}`}>
+        <Metric label="выполнено за неделю" value={trackedDays.length ? `${pct}%` : "—"} accent />
         <Metric label="средняя оценка" value={avg} />
       </div>
       <div className="week-list">
         {days.map((day) => {
           const dayPct = day.total ? Math.round((day.done / day.total) * 100) : 0;
           const date = parseIsoDate(day.date);
+          const progressIsActive = day.trackingStarted && day.date <= today;
 
           return (
             <button
-              className={day.date === today ? "week-row today" : "week-row"}
+              className={[
+                "week-row",
+                day.date === today ? "today" : "",
+                !day.trackingStarted ? "before-tracking" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
               key={day.date}
               onClick={() => onOpenDay(day.date)}
               type="button"
@@ -2283,9 +2450,9 @@ function WeekScreen({
               <span className="week-main">
                 <span className="week-top">
                   <strong>
-                    {day.done}/{day.total} задач
+                    {day.trackingStarted ? `${day.done}/${day.total} задач` : "Нет данных"}
                   </strong>
-                  <small>{dayPct}%</small>
+                  <small>{day.trackingStarted ? `${dayPct}%` : "—"}</small>
                 </span>
                 <span className="mini-chips">
                   {day.tags.slice(0, 3).map((tag) => (
@@ -2293,7 +2460,14 @@ function WeekScreen({
                   ))}
                 </span>
                 <span className="mini-progress">
-                  <i style={{ width: `${dayPct}%` }} />
+                  {progressIsActive && (
+                    <i
+                      style={{
+                        background: percentProgressGradient(dayPct),
+                        width: dayPct === 0 ? "14px" : `${dayPct}%`,
+                      }}
+                    />
+                  )}
                 </span>
               </span>
             </button>
@@ -2328,7 +2502,11 @@ function MonthScreen({
   const blanks = Array.from({ length: lead }, (_, index) => index);
 
   function startSwipe(event: React.PointerEvent<HTMLElement>) {
-    if (event.clientX > 52) {
+    const interactiveTarget =
+      event.target instanceof Element &&
+      event.target.closest("button, a, input, textarea, select, [role='button']");
+
+    if (event.clientX > 52 || interactiveTarget) {
       return;
     }
 
@@ -2412,42 +2590,90 @@ function MonthScreen({
         <span className="month-header-spacer" aria-hidden="true" />
       </header>
 
-      <div className="month-period-title">
-        <div>
-          <p className="overline">{first.slice(0, 4)}</p>
-          <h2>
-            {new Intl.DateTimeFormat("ru-RU", {
-              month: "long",
-              timeZone: "UTC",
-            }).format(firstDate)}
-          </h2>
+      <section className="month-calendar-card">
+        <div className="month-period-title">
+          <div>
+            <p className="overline">{first.slice(0, 4)}</p>
+            <h2>
+              {new Intl.DateTimeFormat("ru-RU", {
+                month: "long",
+                timeZone: "UTC",
+              }).format(firstDate)}
+            </h2>
+          </div>
+          <div className="header-actions month-switcher">
+            <IconButton label="Предыдущий месяц" onClick={onPrevMonth}>
+              <ChevronLeft size={18} />
+            </IconButton>
+            <IconButton label="Следующий месяц" onClick={onNextMonth}>
+              <ChevronRight size={18} />
+            </IconButton>
+          </div>
         </div>
-        <div className="header-actions month-switcher">
-          <IconButton label="Предыдущий месяц" onClick={onPrevMonth}>
-            <ChevronLeft size={18} />
-          </IconButton>
-          <IconButton label="Следующий месяц" onClick={onNextMonth}>
-            <ChevronRight size={18} />
-          </IconButton>
-        </div>
-      </div>
 
-      <div className="calendar-dows">
-        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => (
-          <span key={day}>{day}</span>
-        ))}
-      </div>
-      <div className="calendar-grid">
-        {blanks.map((blank) => (
-          <span className="calendar-cell blank" key={blank} />
-        ))}
-        {days.map((day) => {
+        <div className="month-status-summary" aria-label="Легенда оценки дня">
+          <span className="complete">
+            <i aria-hidden="true" />
+            <small>Хороший день</small>
+          </span>
+          <span className="partial">
+            <i aria-hidden="true" />
+            <small>Средний день</small>
+          </span>
+          <span className="missed">
+            <i aria-hidden="true" />
+            <small>Плохой день</small>
+          </span>
+        </div>
+
+        <div className="calendar-dows">
+          {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => (
+            <span key={day}>{day}</span>
+          ))}
+        </div>
+        <div className="calendar-grid">
+          {blanks.map((blank) => (
+            <span className="calendar-cell blank" key={blank} />
+          ))}
+          {days.map((day) => {
           const date = parseIsoDate(day.date);
           const weekend = date.getUTCDay() === 0;
+          const isToday = day.date === today;
+          const isPast = day.date < today;
+          const completionPercent = day.total
+            ? Math.round((day.done / day.total) * 100)
+            : 0;
+          const completionStatus = !isPast || !day.trackingStarted
+            ? null
+            : day.total > 0 && day.done >= day.total
+              ? "complete"
+              : day.done > 0
+                ? "partial"
+                : "missed";
+          const statusLabel = isToday
+            ? "Сегодня"
+            : !day.trackingStarted
+              ? "Статистика ещё не велась"
+            : !isPast
+              ? "Будущий день"
+              : completionStatus === "complete"
+                ? `Выполнено ${day.done} из ${day.total} задач, 100%`
+                : completionStatus === "partial"
+                  ? `Выполнено ${day.done} из ${day.total} задач, ${completionPercent}%`
+                  : day.total > 0
+                    ? `Не выполнено ни одной из ${day.total} задач, 0%`
+                    : "Дел не было, день не выполнен";
 
           return (
             <button
-              className={day.date === today ? "calendar-cell today" : "calendar-cell"}
+              aria-label={`${formatHistoryDate(day.date)}. ${statusLabel}`}
+              className={[
+                "calendar-cell",
+                isToday ? "today" : "",
+                completionStatus ? `day-status status-${completionStatus}` : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
               key={day.date}
               onClick={() => onOpenDay(day.date)}
               type="button"
@@ -2456,24 +2682,19 @@ function MonthScreen({
                 <strong className={weekend ? "weekend" : ""}>
                   {date.getUTCDate()}
                 </strong>
-                {day.reflectionFilled && <i />}
+                <span className="calendar-number-meta">
+                  {isPast && day.trackingStarted && <em>{completionPercent}%</em>}
+                </span>
               </span>
-              {day.tags.slice(0, 2).map((tag) => (
+              {day.tags.slice(0, 1).map((tag) => (
                 <MiniChip key={tag} name={tag} />
               ))}
-              {day.tags.length > 2 && <small>+{day.tags.length - 2}</small>}
+              {day.tags.length > 1 && <small>+{day.tags.length - 1}</small>}
             </button>
           );
-        })}
-      </div>
-      <div className="legend">
-        <span>
-          <i className="square" /> задачи по тегам
-        </span>
-        <span>
-          <i className="dot" /> опросник заполнен
-        </span>
-      </div>
+          })}
+        </div>
+      </section>
     </section>
   );
 }
@@ -2489,7 +2710,7 @@ function BacklogScreen({
   tasks,
   toggleTask,
 }: {
-  onAddQuick: () => void;
+  onAddQuick: (priority: Priority) => Promise<void>;
   onDeleteTask: (task: TaskDto) => void;
   onEditTask: (task: TaskDto) => void;
   onOpenEditor: () => void;
@@ -2501,6 +2722,12 @@ function BacklogScreen({
 }) {
   const done = tasks.filter((task) => task.status === "done").length;
   const active = tasks.length - done;
+  const [priorityOpen, setPriorityOpen] = useState(false);
+
+  const choosePriority = async (priority: Priority) => {
+    await onAddQuick(priority);
+    setPriorityOpen(false);
+  };
 
   return (
     <section className="screen padded backlog-screen fade-in">
@@ -2520,32 +2747,57 @@ function BacklogScreen({
       <div className="quick-row">
         <input
           aria-label="Быстрая задача в бэклог"
-          onChange={(event) => setQuick(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setQuick(value);
+            if (!value.trim()) {
+              setPriorityOpen(false);
+            }
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              onAddQuick();
+            if (event.key === "Enter" && quick.trim()) {
+              setPriorityOpen(true);
             }
           }}
           placeholder="Накинуть дело или план без даты..."
           value={quick}
         />
         <button
+          aria-expanded={priorityOpen}
+          aria-label="Добавить задачу в бэклог"
           className="add-button"
           disabled={saving}
           onClick={() => {
             if (quick.trim()) {
-              onAddQuick();
-              return;
+              setPriorityOpen(true);
             }
-
-            onOpenEditor();
           }}
-          title="Добавить в бэклог"
+          title="Добавить задачу в бэклог"
           type="button"
         >
-          <Plus size={24} />
+          <Check size={23} strokeWidth={2.7} />
         </button>
       </div>
+
+      {priorityOpen && (
+        <div
+          aria-label="Выберите приоритет новой задачи"
+          className="backlog-priority-picker"
+          role="group"
+        >
+          {(["must", "should", "optional"] as const).map((priority) => (
+            <button
+              className={`priority-${priority}`}
+              disabled={saving}
+              key={priority}
+              onClick={() => void choosePriority(priority)}
+              type="button"
+            >
+              {priorityMeta[priority].label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="metric-grid two">
         <Metric label="активных планов" value={String(active)} accent />
@@ -2577,21 +2829,31 @@ function BacklogScreen({
 }
 
 function BlogScreen({
-  checkedDates,
   date,
   ideasCount,
   onNextMonth,
+  onNextPlanMonth,
   onOpenIdeas,
   onPrevMonth,
-  onToggleDay,
+  onPrevPlanMonth,
+  onSaveMonthPlan,
+  onTogglePlatform,
+  plan,
+  planLoading,
+  postingDays,
 }: {
-  checkedDates: string[];
   date: string;
   ideasCount: number;
   onNextMonth: () => void;
+  onNextPlanMonth: () => void;
   onOpenIdeas: () => void;
   onPrevMonth: () => void;
-  onToggleDay: (date: string) => void;
+  onPrevPlanMonth: () => void;
+  onSaveMonthPlan: (plan: BlogMonthPlan) => Promise<BlogMonthPlan>;
+  onTogglePlatform: (date: string, platform: VideoPostingPlatform) => void;
+  plan: BlogMonthPlan;
+  planLoading: boolean;
+  postingDays: VideoPostingDay[];
 }) {
   return (
     <section className="screen padded blog-screen fade-in">
@@ -2618,39 +2880,357 @@ function BlogScreen({
       </div>
 
       <VideoPostingPanel
-        checkedDates={checkedDates}
         date={date}
         onNextMonth={onNextMonth}
         onPrevMonth={onPrevMonth}
-        onToggleDay={onToggleDay}
+        onTogglePlatform={onTogglePlatform}
+        postingDays={postingDays}
+      />
+      <BlogMonthPlanPanel
+        loading={planLoading}
+        onNextMonth={onNextPlanMonth}
+        onPrevMonth={onPrevPlanMonth}
+        onSave={onSaveMonthPlan}
+        plan={plan}
       />
     </section>
   );
 }
 
+function BlogMonthPlanPanel({
+  loading,
+  onNextMonth,
+  onPrevMonth,
+  onSave,
+  plan,
+}: {
+  loading: boolean;
+  onNextMonth: () => void;
+  onPrevMonth: () => void;
+  onSave: (plan: BlogMonthPlan) => Promise<BlogMonthPlan>;
+  plan: BlogMonthPlan;
+}) {
+  const [draft, setDraft] = useState(plan);
+  const [newItem, setNewItem] = useState("");
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const monthDate = parseIsoDate(`${plan.month}-01`);
+  const monthLabel = new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    timeZone: "UTC",
+    year: "numeric",
+  }).format(monthDate);
+  const completedPlans = draft.items.filter((item) => item.done).length;
+
+  useEffect(() => {
+    setDraft(plan);
+    setNewItem("");
+    setAddDialogOpen(false);
+    setSaveError(null);
+  }, [plan]);
+
+  async function persistPlan(next: BlogMonthPlan) {
+    setDraft(next);
+    setBusy(true);
+    setSaveError(null);
+
+    try {
+      const normalized = {
+        ...next,
+        focus: next.focus.trim(),
+        items: next.items.map((item) => ({ ...item, title: item.title.trim() })),
+      };
+      const savedPlan = await onSave(normalized);
+      setDraft(savedPlan);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Не удалось сохранить план");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addPlanItem() {
+    const title = newItem.trim();
+
+    if (!title) {
+      return;
+    }
+
+    const next = {
+      ...draft,
+      items: [
+        ...draft.items,
+        {
+          id: `plan-${Date.now()}-${draft.items.length}`,
+          title,
+          done: false,
+        },
+      ],
+    };
+
+    setNewItem("");
+    setAddDialogOpen(false);
+    void persistPlan(next);
+  }
+
+  return (
+    <section className="blog-month-plan" aria-busy={loading}>
+      <header className="blog-month-plan-head">
+        <span className="blog-month-plan-icon">
+          <Check size={18} strokeWidth={2.6} />
+        </span>
+        <span>
+          <strong>Цели и планы</strong>
+          <small>{monthLabel}</small>
+        </span>
+        <div className="blog-month-plan-actions">
+          {draft.items.length > 0 && (
+            <span className="blog-plan-counter">
+              {completedPlans}/{draft.items.length}
+            </span>
+          )}
+          <IconButton
+            disabled={loading || busy}
+            label="Предыдущий месяц планов"
+            onClick={onPrevMonth}
+          >
+            <ChevronLeft size={18} />
+          </IconButton>
+          <IconButton
+            disabled={loading || busy}
+            label="Следующий месяц планов"
+            onClick={onNextMonth}
+          >
+            <ChevronRight size={18} />
+          </IconButton>
+        </div>
+      </header>
+
+      <label className="blog-focus-field">
+        <span>Фокус месяца</span>
+        <textarea
+          disabled={loading || busy}
+          maxLength={500}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, focus: event.target.value }))
+          }
+          onBlur={() => {
+            const nextFocus = draft.focus.trim();
+
+            if (nextFocus !== plan.focus) {
+              void persistPlan({ ...draft, focus: nextFocus });
+            }
+          }}
+          placeholder="Например: регулярно выпускать короткие видео"
+          rows={2}
+          value={draft.focus}
+        />
+      </label>
+
+      <div className="blog-plan-list-head">
+        <span className="blog-plan-list-title">
+          <strong>Планы на месяц</strong>
+          <small>
+            {draft.items.length > 0
+              ? `${draft.items.length} ${draft.items.length === 1 ? "план" : "плана"}`
+              : "Короткие шаги к цели"}
+          </small>
+        </span>
+        <button
+          aria-label="Добавить план"
+          className="blog-plan-open-add"
+          disabled={loading || busy}
+          onClick={() => setAddDialogOpen(true)}
+          type="button"
+        >
+          <Plus size={16} strokeWidth={2.5} />
+          <span>Добавить</span>
+        </button>
+      </div>
+
+      {draft.items.length > 0 ? (
+        <div className="blog-plan-list">
+          {draft.items.map((item) => (
+            <div className={item.done ? "blog-plan-item done" : "blog-plan-item"} key={item.id}>
+              <button
+                aria-label={item.done ? `Вернуть план ${item.title}` : `Выполнить план ${item.title}`}
+                aria-pressed={item.done}
+                className="blog-plan-check"
+                disabled={loading || busy}
+                onClick={() => {
+                  const next = {
+                    ...draft,
+                    items: draft.items.map((currentItem) =>
+                      currentItem.id === item.id
+                        ? { ...currentItem, done: !currentItem.done }
+                        : currentItem,
+                    ),
+                  };
+                  void persistPlan(next);
+                }}
+                type="button"
+              >
+                {item.done && <Check size={14} strokeWidth={3} />}
+              </button>
+              <span>{item.title}</span>
+              <button
+                aria-label={`Удалить план ${item.title}`}
+                className="blog-plan-delete"
+                disabled={loading || busy}
+                onClick={() => {
+                  const next = {
+                    ...draft,
+                    items: draft.items.filter((currentItem) => currentItem.id !== item.id),
+                  };
+                  void persistPlan(next);
+                }}
+                type="button"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="blog-plan-empty">
+          <span className="blog-plan-empty-icon">
+            <Check size={16} strokeWidth={2.5} />
+          </span>
+          <span>
+            <strong>Планов пока нет</strong>
+            <small>Добавь первый небольшой шаг — он появится здесь.</small>
+          </span>
+        </div>
+      )}
+
+      {saveError && <p className="blog-plan-error">{saveError}</p>}
+      {addDialogOpen && (
+        <div
+          className="dialog-layer blog-plan-dialog-layer"
+          onMouseDown={() => setAddDialogOpen(false)}
+          role="presentation"
+        >
+          <section
+            aria-labelledby="blog-plan-dialog-title"
+            aria-modal="true"
+            className="picker-dialog blog-plan-dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <span aria-hidden="true" className="blog-plan-dialog-handle" />
+            <header className="blog-plan-dialog-head">
+              <div>
+                <strong id="blog-plan-dialog-title">Новый план</strong>
+                <small>Добавь один конкретный шаг на этот месяц</small>
+              </div>
+              <button
+                aria-label="Закрыть добавление плана"
+                onClick={() => setAddDialogOpen(false)}
+                type="button"
+              >
+                <X size={19} />
+              </button>
+            </header>
+            <label className="blog-plan-dialog-field">
+              <input
+                aria-label="Название плана"
+                autoFocus
+                maxLength={200}
+                onChange={(event) => setNewItem(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    addPlanItem();
+                  }
+                }}
+                placeholder="Название плана"
+                value={newItem}
+              />
+            </label>
+            <button
+              className="blog-plan-dialog-add"
+              disabled={!newItem.trim()}
+              onClick={addPlanItem}
+              type="button"
+            >
+              Добавить
+            </button>
+          </section>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function VideoPostingPanel({
-  checkedDates,
   date,
   onNextMonth,
   onPrevMonth,
-  onToggleDay,
+  onTogglePlatform,
+  postingDays,
 }: {
-  checkedDates: string[];
   date: string;
   onNextMonth: () => void;
   onPrevMonth: () => void;
-  onToggleDay: (date: string) => void;
+  onTogglePlatform: (date: string, platform: VideoPostingPlatform) => void;
+  postingDays: VideoPostingDay[];
 }) {
   const calendar = monthGrid(date);
-  const checked = new Set(checkedDates);
-  const [removeCandidate, setRemoveCandidate] = useState<string | null>(null);
-  const totalDays = calendar.days.length;
-  const checkedCount = calendar.days.filter((day) => checked.has(day)).length;
+  const postingByDate = new Map(postingDays.map((day) => [day.date, day]));
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [postingDraft, setPostingDraft] = useState<{
+    instagram: boolean;
+    tiktok: boolean;
+  } | null>(null);
+  const instagramCount = calendar.days.filter(
+    (day) => postingByDate.get(day)?.instagram,
+  ).length;
+  const tiktokCount = calendar.days.filter((day) => postingByDate.get(day)?.tiktok).length;
+  const completedDaysCount = calendar.days.filter((day) => {
+    const posting = postingByDate.get(day);
+
+    return posting?.instagram || posting?.tiktok;
+  }).length;
   const monthDate = parseIsoDate(date);
   const monthName = new Intl.DateTimeFormat("ru-RU", {
     month: "long",
     timeZone: "UTC",
   }).format(monthDate);
+
+  function openPostingDialog(day: string) {
+    const posting = postingByDate.get(day);
+
+    setSelectedDate(day);
+    setPostingDraft({
+      instagram: posting?.instagram ?? false,
+      tiktok: posting?.tiktok ?? false,
+    });
+  }
+
+  function closePostingDialog() {
+    setSelectedDate(null);
+    setPostingDraft(null);
+  }
+
+  function savePostingDraft() {
+    if (!selectedDate || !postingDraft) {
+      return;
+    }
+
+    const posting = postingByDate.get(selectedDate);
+    const persistedInstagram = posting?.instagram ?? false;
+    const persistedTiktok = posting?.tiktok ?? false;
+
+    if (postingDraft.instagram !== persistedInstagram) {
+      onTogglePlatform(selectedDate, "instagram");
+    }
+
+    if (postingDraft.tiktok !== persistedTiktok) {
+      onTogglePlatform(selectedDate, "tiktok");
+    }
+
+    closePostingDialog();
+  }
 
   return (
     <section className="video-posting-panel">
@@ -2659,7 +3239,7 @@ function VideoPostingPanel({
           <small>{monthDate.getUTCFullYear()}</small>
           <strong>{monthName}</strong>
           <span>
-            Постинг видео · {checkedCount}/{totalDays}
+            Дней с публикациями · {completedDaysCount}/{calendar.days.length}
           </span>
         </div>
         <div className="video-plan-actions">
@@ -2672,6 +3252,23 @@ function VideoPostingPanel({
         </div>
       </header>
 
+      <div className="video-platform-summary" aria-label="Публикации по платформам">
+        <div className="video-platform-stat instagram">
+          <span aria-hidden="true" className="social-platform-mark instagram" />
+          <span className="video-platform-stat-copy">
+            <small>Instagram</small>
+            <strong>{instagramCount}</strong>
+          </span>
+        </div>
+        <div className="video-platform-stat tiktok">
+          <span aria-hidden="true" className="social-platform-mark tiktok" />
+          <span className="video-platform-stat-copy">
+            <small>TikTok</small>
+            <strong>{tiktokCount}</strong>
+          </span>
+        </div>
+      </div>
+
       <div className="video-weekdays">
         {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => (
           <span key={day}>{day}</span>
@@ -2683,70 +3280,126 @@ function VideoPostingPanel({
         ))}
         {calendar.days.map((day) => {
           const dateValue = parseIsoDate(day);
-          const isChecked = checked.has(day);
+          const posting = postingByDate.get(day);
+          const hasInstagram = posting?.instagram ?? false;
+          const hasTiktok = posting?.tiktok ?? false;
+          const hasPosting = hasInstagram || hasTiktok;
           const isToday = day === localTodayDate();
 
           return (
             <button
-              aria-pressed={isChecked}
+              aria-label={[
+                String(dateValue.getUTCDate()),
+                hasInstagram ? "Instagram" : "",
+                hasTiktok ? "TikTok" : "",
+              ]
+                .filter(Boolean)
+                .join(", ")}
+              aria-pressed={hasPosting}
               className={[
                 "video-day",
-                isChecked ? "checked" : "",
+                hasPosting ? "has-platform" : "",
+                hasInstagram ? "platform-instagram" : "",
+                hasTiktok ? "platform-tiktok" : "",
                 isToday ? "today" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
               key={day}
-              onClick={() => {
-                if (isChecked) {
-                  setRemoveCandidate(day);
-                  return;
-                }
-
-                onToggleDay(day);
-              }}
+              onClick={() => openPostingDialog(day)}
               type="button"
             >
-              <span>{dateValue.getUTCDate()}</span>
-              <i aria-hidden="true" />
+              <span className="video-day-number">{dateValue.getUTCDate()}</span>
+              {hasPosting && (
+                <span aria-hidden="true" className="video-day-signals">
+                  {hasInstagram && <i className="instagram" />}
+                  {hasTiktok && <i className="tiktok" />}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
-      {removeCandidate && (
+      {selectedDate && postingDraft && (
         <div
           className="dialog-layer"
           role="presentation"
-          onMouseDown={() => setRemoveCandidate(null)}
+          onMouseDown={closePostingDialog}
         >
           <section
-            aria-labelledby="remove-posting-mark-title"
+            aria-labelledby="posting-platform-title"
             aria-modal="true"
-            className="picker-dialog confirm-dialog"
+            className="picker-dialog posting-platform-dialog"
             onMouseDown={(event) => event.stopPropagation()}
             role="dialog"
           >
-            <strong id="remove-posting-mark-title">Убрать отметку?</strong>
-            <p>{formatHistoryDate(removeCandidate)}</p>
-            <div className="confirm-actions">
+            <header className="posting-platform-head">
+              <div>
+                <small>{formatHistoryDate(selectedDate)}</small>
+                <strong id="posting-platform-title">Где опубликовано?</strong>
+              </div>
               <button
-                className="secondary-action"
-                onClick={() => setRemoveCandidate(null)}
+                aria-label="Закрыть выбор платформ"
+                onClick={closePostingDialog}
                 type="button"
               >
-                Отмена
+                <X size={19} />
+              </button>
+            </header>
+            <p className="posting-platform-hint">
+              Можно отметить одну платформу или сразу обе.
+            </p>
+            <div className="posting-platform-options">
+              <button
+                aria-pressed={postingDraft.instagram}
+                className={`posting-platform-option instagram${
+                  postingDraft.instagram ? " active" : ""
+                }`}
+                onClick={() =>
+                  setPostingDraft((current) =>
+                    current ? { ...current, instagram: !current.instagram } : current,
+                  )
+                }
+                type="button"
+              >
+                <span aria-hidden="true" className="social-platform-mark instagram" />
+                <span className="posting-platform-copy">
+                  <strong>Instagram</strong>
+                  <small>Reels или пост</small>
+                </span>
+                <span className="posting-platform-check">
+                  {postingDraft.instagram && <Check size={16} strokeWidth={3} />}
+                </span>
               </button>
               <button
-                className="danger-action"
-                onClick={() => {
-                  onToggleDay(removeCandidate);
-                  setRemoveCandidate(null);
-                }}
+                aria-pressed={postingDraft.tiktok}
+                className={`posting-platform-option tiktok${
+                  postingDraft.tiktok ? " active" : ""
+                }`}
+                onClick={() =>
+                  setPostingDraft((current) =>
+                    current ? { ...current, tiktok: !current.tiktok } : current,
+                  )
+                }
                 type="button"
               >
-                Убрать
+                <span aria-hidden="true" className="social-platform-mark tiktok" />
+                <span className="posting-platform-copy">
+                  <strong>TikTok</strong>
+                  <small>Короткое видео</small>
+                </span>
+                <span className="posting-platform-check">
+                  {postingDraft.tiktok && <Check size={16} strokeWidth={3} />}
+                </span>
               </button>
             </div>
+            <button
+              className="posting-platform-done"
+              onClick={savePostingDraft}
+              type="button"
+            >
+              Готово
+            </button>
           </section>
         </div>
       )}
@@ -3476,7 +4129,8 @@ function StatsScreen({
     unfinishedPercent: 0,
   };
   const monthTitle = formatMonthTitle(monthDate);
-  const percentColor = percentToneColor(ratio.donePercent);
+  const hasMonthTaskData = ratio.total > 0;
+  const percentColor = hasMonthTaskData ? percentToneColor(ratio.donePercent) : "#a5a7b5";
   const weeklyAxisBars = weekStats?.bars ?? [];
   const weekRangeStart = weeklyAxisBars[0]?.date ?? getWeekStart(weekDate);
   const weekRangeEnd = weeklyAxisBars.at(-1)?.date ?? addDays(weekRangeStart, 6);
@@ -3493,7 +4147,7 @@ function StatsScreen({
       ? weeklyLinePaddingX + (index / (weeklyAxisBars.length - 1)) * weeklyLineInnerWidth
       : weeklyLineWidth / 2;
   const weeklyLinePoints = weeklyAxisBars.flatMap((bar, index) => {
-    if (bar.date > lastVisibleDate) {
+    if (!bar.trackingStarted || bar.date > lastVisibleDate) {
       return [];
     }
 
@@ -3532,14 +4186,16 @@ function StatsScreen({
         <small>Календарь вечерних опросников и сохранённых ответов</small>
         <ChevronRight size={18} />
       </button>
-      <section className="chart-card task-ratio-card">
+      <section className={`chart-card task-ratio-card${hasMonthTaskData ? "" : " empty"}`}>
         <div className="stats-card-head">
           <div>
             <p className="overline">{monthTitle}</p>
             <h2>Задачи за месяц</h2>
           </div>
           <div className="stats-month-actions">
-            <strong style={{ color: percentColor }}>{ratio.donePercent}%</strong>
+            <strong style={{ color: percentColor }}>
+              {hasMonthTaskData ? `${ratio.donePercent}%` : "—"}
+            </strong>
             <IconButton label="Предыдущий месяц" onClick={() => setMonthDate(addMonths(monthDate, -1))}>
               <ChevronLeft size={18} />
             </IconButton>
@@ -3549,7 +4205,7 @@ function StatsScreen({
           </div>
         </div>
         <div className="task-ratio-track">
-          <i style={{ width: `${ratio.donePercent}%` }} />
+          {hasMonthTaskData && <i style={{ width: `${ratio.donePercent}%` }} />}
         </div>
         <div className="task-ratio-grid">
           <button className="done" onClick={() => onOpenTaskList("done", monthDate)} type="button">
@@ -4804,19 +5460,25 @@ function EditorScreen({
         ))}
       </div>
       <Label>Теги</Label>
-      <div className="tag-picker">
-        {tags.map((tag) => (
-          <button
-            className={draft.tags.includes(tag.name) ? "selected" : ""}
-            key={tag.id}
-            onClick={() => toggleTag(tag.name)}
-            style={{ backgroundColor: tag.bg, color: tag.fg }}
-            type="button"
-          >
-            {tag.name}
-          </button>
-        ))}
-      </div>
+      {tags.length > 0 ? (
+        <div className="tag-picker">
+          {tags.map((tag) => (
+            <button
+              className={draft.tags.includes(tag.name) ? "selected" : ""}
+              key={tag.id}
+              onClick={() => toggleTag(tag.name)}
+              style={{ backgroundColor: tag.bg, color: tag.fg }}
+              type="button"
+            >
+              {tag.name}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="tag-empty editor-tags-empty">
+          У вас пока нет тегов. Добавьте их в настройках.
+        </p>
+      )}
       <section
         className={`picker-card reminder-card${remindersOpen ? " expanded" : ""}${
           draft.scheduledDate ? "" : " disabled"
@@ -4949,7 +5611,7 @@ function EditorScreen({
       {!editing && (
         <button
           className="primary-action editor-create-action"
-          disabled={saving}
+          disabled={saving || !draft.priority}
           onClick={onSave}
           type="button"
         >

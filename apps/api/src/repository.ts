@@ -63,8 +63,30 @@ export type IdeaTagDto = {
   fg: string;
 };
 
+export type VideoPostingPlatform = "instagram" | "tiktok";
+
+export type VideoPostingDayDto = {
+  date: string;
+  instagram: boolean;
+  tiktok: boolean;
+};
+
 export type VideoPostingMonthDto = {
-  checkedDates: string[];
+  days: VideoPostingDayDto[];
+};
+
+export type BlogMonthPlanItemDto = {
+  id: string;
+  title: string;
+  done: boolean;
+};
+
+export type BlogMonthPlanDto = {
+  month: string;
+  focus: string;
+  instagramTarget: number;
+  tiktokTarget: number;
+  items: BlogMonthPlanItemDto[];
 };
 
 export const DEMO_USER_ID = 1;
@@ -459,53 +481,152 @@ export async function getVideoPostingMonth(
   userId = DEMO_USER_ID
 ): Promise<VideoPostingMonthDto> {
   const start = `${year}-${String(month).padStart(2, "0")}-01`;
-  const result = await query<{ post_date: string }>(
+  const result = await query<{
+    post_date: string;
+    instagram: boolean;
+    tiktok: boolean;
+  }>(
     `
-      select to_char(post_date, 'YYYY-MM-DD') as post_date
+      select
+        to_char(post_date, 'YYYY-MM-DD') as post_date,
+        instagram,
+        tiktok
       from video_posting_days
       where user_id = $1
         and post_date >= $2::date
         and post_date < ($2::date + interval '1 month')
+        and (instagram or tiktok)
       order by post_date
     `,
     [userId, start]
   );
 
   return {
-    checkedDates: result.rows.map((row) => row.post_date)
+    days: result.rows.map((row) => ({
+      date: row.post_date,
+      instagram: row.instagram,
+      tiktok: row.tiktok
+    }))
   };
 }
 
-export async function setVideoPostingDay(
+export async function setVideoPostingPlatform(
   date: string,
+  platform: VideoPostingPlatform,
   checked: boolean,
   userId = DEMO_USER_ID
 ) {
-  if (!checked) {
-    await query("delete from video_posting_days where user_id = $1 and post_date = $2", [
+  await query(
+    `
+      insert into video_posting_days (user_id, post_date, instagram, tiktok)
+      values ($1, $2, $3, $4)
+      on conflict (user_id, post_date)
+      do update set
+        instagram = case
+          when $5::text = 'instagram' then $6::boolean
+          else video_posting_days.instagram
+        end,
+        tiktok = case
+          when $5::text = 'tiktok' then $6::boolean
+          else video_posting_days.tiktok
+        end,
+        updated_at = now()
+    `,
+    [
       userId,
-      date
-    ]);
-    return {
       date,
-      checked: false
-    };
-  }
+      platform === "instagram" ? checked : false,
+      platform === "tiktok" ? checked : false,
+      platform,
+      checked
+    ]
+  );
 
   await query(
     `
-      insert into video_posting_days (user_id, post_date)
-      values ($1, $2)
-      on conflict (user_id, post_date)
-      do update set updated_at = now()
+      delete from video_posting_days
+      where user_id = $1
+        and post_date = $2
+        and not instagram
+        and not tiktok
     `,
     [userId, date]
   );
 
+  const result = await query<{ instagram: boolean; tiktok: boolean }>(
+    `
+      select instagram, tiktok
+      from video_posting_days
+      where user_id = $1 and post_date = $2
+    `,
+    [userId, date]
+  );
+  const day = result.rows[0];
+
   return {
     date,
-    checked: true
+    instagram: day?.instagram ?? false,
+    tiktok: day?.tiktok ?? false
   };
+}
+
+export async function getBlogMonthPlan(
+  month: string,
+  userId = DEMO_USER_ID
+): Promise<BlogMonthPlanDto> {
+  const result = await query<{
+    focus: string;
+    instagram_target: number;
+    tiktok_target: number;
+    items: BlogMonthPlanItemDto[] | null;
+  }>(
+    `
+      select focus, instagram_target, tiktok_target, items
+      from blog_month_plans
+      where user_id = $1 and plan_month = $2::date
+    `,
+    [userId, `${month}-01`]
+  );
+  const plan = result.rows[0];
+
+  return {
+    month,
+    focus: plan?.focus ?? "",
+    instagramTarget: plan?.instagram_target ?? 0,
+    tiktokTarget: plan?.tiktok_target ?? 0,
+    items: Array.isArray(plan?.items) ? plan.items : []
+  };
+}
+
+export async function saveBlogMonthPlan(
+  month: string,
+  input: Omit<BlogMonthPlanDto, "month">,
+  userId = DEMO_USER_ID
+): Promise<BlogMonthPlanDto> {
+  await query(
+    `
+      insert into blog_month_plans
+        (user_id, plan_month, focus, instagram_target, tiktok_target, items)
+      values ($1, $2::date, $3, $4, $5, $6::jsonb)
+      on conflict (user_id, plan_month)
+      do update set
+        focus = excluded.focus,
+        instagram_target = excluded.instagram_target,
+        tiktok_target = excluded.tiktok_target,
+        items = excluded.items,
+        updated_at = now()
+    `,
+    [
+      userId,
+      `${month}-01`,
+      input.focus,
+      input.instagramTarget,
+      input.tiktokTarget,
+      JSON.stringify(input.items)
+    ]
+  );
+
+  return getBlogMonthPlan(month, userId);
 }
 
 export async function getTasksForDate(date: string, userId = DEMO_USER_ID) {
@@ -1073,7 +1194,37 @@ export async function upsertReflection(
     : null;
 }
 
+async function getTrackingStartDate(userId: number) {
+  const result = await query<{ tracking_start_date: string | null }>(
+    `
+      select to_char(min(activity_date), 'YYYY-MM-DD') as tracking_start_date
+      from (
+        select scheduled_date as activity_date
+        from tasks
+        where user_id = $1 and scheduled_date is not null
+
+        union all
+
+        select entry_date as activity_date
+        from day_entries
+        where user_id = $1
+          and (nullif(btrim(note), '') is not null or productivity_score is not null)
+
+        union all
+
+        select reflection_date as activity_date
+        from reflections
+        where user_id = $1
+      ) activity
+    `,
+    [userId]
+  );
+
+  return result.rows[0]?.tracking_start_date ?? null;
+}
+
 export async function getWeekSummary(start: string, userId = DEMO_USER_ID) {
+  const trackingStartDate = await getTrackingStartDate(userId);
   const result = await query<{
     date: string;
     total: number;
@@ -1111,6 +1262,7 @@ export async function getWeekSummary(start: string, userId = DEMO_USER_ID) {
     done: row.done,
     score: row.score,
     reflectionFilled: row.reflection_filled,
+    trackingStarted: trackingStartDate !== null && row.date >= trackingStartDate,
     tags: row.tags ?? []
   }));
 }
@@ -1121,6 +1273,7 @@ export async function getMonthSummary(
   userId = DEMO_USER_ID
 ) {
   const start = `${year}-${String(month).padStart(2, "0")}-01`;
+  const trackingStartDate = await getTrackingStartDate(userId);
   const result = await query<{
     date: string;
     total: number;
@@ -1158,6 +1311,7 @@ export async function getMonthSummary(
     total: row.total,
     done: row.done,
     reflectionFilled: row.reflection_filled,
+    trackingStarted: trackingStartDate !== null && row.date >= trackingStartDate,
     tags: row.tags ?? []
   }));
 }
@@ -1208,6 +1362,7 @@ export async function getHistory(userId = DEMO_USER_ID) {
 }
 
 export async function getStats(userId = DEMO_USER_ID, selectedDate: string) {
+  const trackingStartDate = await getTrackingStartDate(userId);
   const weekResult = await query<{
     label: string;
     date: string;
@@ -1351,6 +1506,7 @@ export async function getStats(userId = DEMO_USER_ID, selectedDate: string) {
   }
 
   return {
+    trackingStartDate,
     weekAverage,
     monthAverage,
     todayScore: weekRows.at(-1)?.score ?? 0,
@@ -1360,7 +1516,8 @@ export async function getStats(userId = DEMO_USER_ID, selectedDate: string) {
       score: row.score ?? 0,
       done: row.done,
       unfinished: Math.max(row.total - row.done, 0),
-      total: row.total
+      total: row.total,
+      trackingStarted: trackingStartDate !== null && row.date >= trackingStartDate
     })),
     taskRatio: {
       done: ratio.done,

@@ -153,9 +153,28 @@ export async function initDb() {
     create table if not exists video_posting_days (
       user_id integer not null references users(id) on delete cascade,
       post_date date not null,
+      instagram boolean not null default true,
+      tiktok boolean not null default false,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now(),
       primary key (user_id, post_date)
+    );
+
+    alter table video_posting_days
+      add column if not exists instagram boolean not null default true;
+    alter table video_posting_days
+      add column if not exists tiktok boolean not null default false;
+
+    create table if not exists blog_month_plans (
+      user_id integer not null references users(id) on delete cascade,
+      plan_month date not null,
+      focus text not null default '',
+      instagram_target integer not null default 0,
+      tiktok_target integer not null default 0,
+      items jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (user_id, plan_month)
     );
   `);
 
